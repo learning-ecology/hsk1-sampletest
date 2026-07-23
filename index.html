@@ -102,13 +102,16 @@
       {range:[31,35],title:"二、阅读 · 第三部分",options:["A","B","C","D","E","F"]},
       {range:[36,40],title:"二、阅读 · 第四部分",options:["A","B","C","D","E","F"]}
     ];
-    const key=["✓","✕","✕","✕","✓","A","A","C","A","C","D","B","A","E","F","B","B","C","C","B","✓","✓","✕","✕","✓","D","F","C","A","B","C","D","A","B","E","F","B","E","A","C"];
+    // The answer key is NOT in this page any more — it lives in the database
+    // and scoring happens on the server (so students can't read it from source).
+    const testKey="hsk1-h10901";
     const storeKey="hsk1-h10901-online";
     const state=JSON.parse(localStorage.getItem(storeKey)||'{"answers":{},"seconds":2400,"paused":false,"name":""}');
+    if(!state.startedAtISO){state.startedAtISO=new Date().toISOString();}
     const pages=document.getElementById("pages"), jump=document.getElementById("jump");
     groups.forEach((g,i)=>{
       const [a,b]=g.range;
-      const qs=Array.from({length:b-a+1},(_,j)=>a+j).map(n=>`<div class="q" id="q${n}" data-n="${n}"><strong>Câu ${n}</strong><div class="opts">${g.options.map(o=>`<label class="opt"><input type="radio" name="q${n}" value="${o}"><span>${o}</span></label>`).join("")}</div><div class="key">Đáp án đúng: <b>${key[n-1]}</b></div></div>`).join("");
+      const qs=Array.from({length:b-a+1},(_,j)=>a+j).map(n=>`<div class="q" id="q${n}" data-n="${n}"><strong>Câu ${n}</strong><div class="opts">${g.options.map(o=>`<label class="opt"><input type="radio" name="q${n}" value="${o}"><span>${o}</span></label>`).join("")}</div><div class="key"></div></div>`).join("");
       pages.insertAdjacentHTML("beforeend",`<section class="test-page"><div class="section-head"><h2>${g.title}</h2><span class="range">Câu ${a}-${b}</span></div><div class="page-grid"><div class="sheet"><img src="${pageImages[i]}" alt="Trang đề thi câu ${a} đến ${b}"></div><aside class="answers"><h3>Chọn đáp án</h3>${qs}</aside></div></section>`);
     });
     for(let n=1;n<=40;n++) jump.insertAdjacentHTML("beforeend",`<a href="#q${n}" id="j${n}">${n}</a>`);
@@ -126,12 +129,34 @@
     document.getElementById("student").addEventListener("input",save);
     setInterval(()=>{if(!state.paused&&state.seconds>0){state.seconds--;save();update();if(state.seconds===0)submitTest()}},1000);
     document.getElementById("pause").onclick=()=>{state.paused=!state.paused;save();update()};
-    function submitTest(){
-      let score=0;document.body.classList.add("submitted");
-      for(let n=1;n<=40;n++){const q=document.getElementById(`q${n}`),ok=state.answers[n]===key[n-1];q.classList.remove("correct","wrong");if(state.answers[n])q.classList.add(ok?"correct":"wrong");if(ok)score++}
-      const answered=Object.keys(state.answers).length;document.getElementById("score").textContent=`${score}/40`;
-      document.getElementById("message").textContent=`${state.name?state.name+", ":""}bạn đã trả lời ${answered}/40 câu và đạt ${score*5}/200 điểm.`;
-      document.getElementById("resultDialog").showModal();
+    let submitted=false;
+    async function submitTest(){
+      const btn=document.getElementById("submit");
+      if(btn.dataset.busy)return; btn.dataset.busy="1"; const oldTxt=btn.textContent; btn.textContent="Đang nộp…"; btn.disabled=true;
+      const elapsed=Math.max(0,2400-(state.seconds||0));
+      const res=(window.LMS&&LMS.submitTest)
+        ? await LMS.submitTest(testKey,state.answers||{},{seconds:elapsed,started:state.startedAtISO})
+        : {error:"Chưa tải được trình theo dõi. Hãy mở bài thi từ Learning Hub."};
+      btn.disabled=false; btn.textContent=oldTxt; delete btn.dataset.busy;
+      const dlg=document.getElementById("resultDialog");
+      if(res&&res.error){
+        document.getElementById("score").textContent="—";
+        document.getElementById("message").textContent="Chưa lưu được kết quả: "+res.error+" Hãy đăng nhập từ Learning Hub rồi nộp lại — bài làm của bạn vẫn được giữ.";
+        dlg.showModal(); return;
+      }
+      // success — the correct answers come from the SERVER (revealed only now, after submitting)
+      submitted=true; document.body.classList.add("submitted");
+      (res.detail||[]).forEach(d=>{
+        const q=document.getElementById("q"+d.n); if(!q)return;
+        q.classList.remove("correct","wrong");
+        if(d.student)q.classList.add(d.ok?"correct":"wrong");
+        const kd=q.querySelector(".key");
+        if(kd)kd.innerHTML="Đáp án đúng: <b>"+d.correct+"</b>"+(d.explanation?" — "+d.explanation:"");
+      });
+      document.querySelectorAll('input[type=radio]').forEach(i=>{i.disabled=true;});
+      document.getElementById("score").textContent=res.correct+"/"+res.total;
+      document.getElementById("message").textContent=(state.name?state.name+", ":"")+"bạn trả lời đúng "+res.correct+"/"+res.total+" câu và đạt "+res.score+"/"+res.max_score+" điểm. Lần làm thứ "+res.attempt_no+".";
+      dlg.showModal();
     }
     document.getElementById("submit").onclick=submitTest;
     document.getElementById("closeResult").onclick=()=>document.getElementById("resultDialog").close();
